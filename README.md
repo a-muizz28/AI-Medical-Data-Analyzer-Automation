@@ -4,7 +4,7 @@
 The **Medical Data Filter AI Integrated** project provides an advanced solution for filtering and processing medical data. By utilizing cutting-edge artificial intelligence, this project ensures the data is accurate, relevant, and actionable for healthcare professionals.
 
 ## Features
-- **AI-Powered Filtering**: Employs machine learning algorithms to filter and sort medical data efficiently.
+- **AI-Powered Filtering**: Employs AI matching to filter and sort medical data efficiently.
 - **Data Integrity**: Maintains the accuracy and reliability of medical data.
 - **User-Friendly Interface**: Designed with a straightforward interface for ease of use.
 - **Scalable**: Capable of handling large volumes of medical data.
