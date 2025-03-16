@@ -2,21 +2,22 @@ import json
 import pandas as pd #type: ignore
 import google.generativeai as genai  #type: ignore
 import fitz  #type: ignore
-import os
+import os 
 import re
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from tkinter import ttk
 from ttkthemes import ThemedTk #type: ignore
+from dotenv import load_dotenv #type: ignore
 
 class DataFilterApp:
     def __init__(self, master):
         self.master = master
-        master.title("Data Filter Application")
+        master.title("AI Data Analyzer Application")
         
         # Set window size and position
-        window_width = 650
-        window_height = 550
+        window_width = 750
+        window_height = 800
         screen_width = master.winfo_screenwidth()
         screen_height = master.winfo_screenheight()
         x_coordinate = int((screen_width/2) - (window_width/2))
@@ -28,12 +29,24 @@ class DataFilterApp:
         self.pdf_file_path = ""
         self.output_json_path = ""
         self.output_excel_path = ""
+        
+        # Available columns in the loaded Excel file
+        self.available_columns = []
+        
+        # Output options
+        self.output_option = tk.StringVar(value="new_file")
 
-        # Configure API key
-        self.gemini_api_key = 'AIzaSyB1UxpRE-UYeLVLlaIX8vlQ9WFHH-gBCnQ'
-        genai.configure(api_key=self.gemini_api_key)
+        # Load environment variables from .env file (if it exists)
+        load_dotenv()
 
-        # Create a style object
+        # Get API key from environment variables with fallback
+        self.gemini_api_key = os.environ.get("GEMINI_API_KEY")
+        if not self.gemini_api_key:
+            messagebox.showerror("API Key Error", "Gemini API key not found in environment variables. Please set GEMINI_API_KEY.")
+        else:
+            genai.configure(api_key=self.gemini_api_key)
+        
+
         self.style = ttk.Style()
         self.style.configure("TButton", padding=6, relief="flat", font=("Helvetica", 10))
         self.style.configure("TLabel", font=("Helvetica", 11))
@@ -51,7 +64,7 @@ class DataFilterApp:
         header_frame = ttk.Frame(main_frame)
         header_frame.pack(fill=tk.X, pady=(0, 20))
         
-        header_label = ttk.Label(header_frame, text="Medical Data Filter Application", style="Header.TLabel")
+        header_label = ttk.Label(header_frame, text="AI Medical Data Analyzer Application", style="Header.TLabel")
         header_label.pack()
         
         # File selection section
@@ -90,15 +103,6 @@ class DataFilterApp:
         params_frame = ttk.LabelFrame(main_frame, text="Filter Parameters", padding=15)
         params_frame.pack(fill=tk.X, pady=(0, 15))
         
-        disease_frame = ttk.Frame(params_frame)
-        disease_frame.pack(fill=tk.X, pady=5)
-        
-        disease_label = ttk.Label(disease_frame, text="Disease Substring:")
-        disease_label.pack(side=tk.LEFT, padx=(0, 5))
-        
-        self.disease_name_entry = ttk.Entry(disease_frame, width=30)
-        self.disease_name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
         # Sheet name entry
         sheet_frame = ttk.Frame(params_frame)
         sheet_frame.pack(fill=tk.X, pady=5)
@@ -108,8 +112,51 @@ class DataFilterApp:
         
         self.sheet_name_entry = ttk.Entry(sheet_frame, width=30)
         self.sheet_name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.sheet_name_entry.insert(0, "IPD DEC-2024")  
+        self.sheet_name_entry.insert(0, "Sheet1")
+        
+        refresh_columns_button = ttk.Button(sheet_frame, text="Load Columns", command=self.load_columns)
+        refresh_columns_button.pack(side=tk.RIGHT)
+        
+        # Filter column selection
+        filter_col_frame = ttk.Frame(params_frame)
+        filter_col_frame.pack(fill=tk.X, pady=5)
+        
+        filter_col_label = ttk.Label(filter_col_frame, text="Filter Column:")
+        filter_col_label.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.filter_column = tk.StringVar()
+        self.filter_column_dropdown = ttk.Combobox(filter_col_frame, textvariable=self.filter_column, state="readonly", width=28)
+        self.filter_column_dropdown.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.filter_column_dropdown['values'] = ["<Load Excel file first>"]
+        
+        # Search term entry
+        search_frame = ttk.Frame(params_frame)
+        search_frame.pack(fill=tk.X, pady=5)
+        
+        search_label = ttk.Label(search_frame, text="Search Term:")
+        search_label.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.search_term_entry = ttk.Entry(search_frame, width=30)
+        self.search_term_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+        # Output options section
+        output_frame = ttk.LabelFrame(main_frame, text="Output Options", padding=15)
+        output_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        # Output type selection with radio buttons
+        output_type_frame = ttk.Frame(output_frame)
+        output_type_frame.pack(fill=tk.X, pady=5)
+        
+        self.output_option = tk.StringVar(value="new_file")
+        
+        new_file_radio = ttk.Radiobutton(output_type_frame, text="Create new Excel file", 
+                                       variable=self.output_option, value="new_file")
+        new_file_radio.pack(anchor=tk.W, pady=2)
+        
+        same_file_radio = ttk.Radiobutton(output_type_frame, text="Add to existing Excel file as new sheet", 
+                                        variable=self.output_option, value="same_file")
+        same_file_radio.pack(anchor=tk.W, pady=2)
+        
         # Processing section
         actions_frame = ttk.Frame(main_frame, padding=15)
         actions_frame.pack(fill=tk.X, pady=(0, 15))
@@ -153,8 +200,52 @@ class DataFilterApp:
             filename = os.path.basename(file_path)
             self.excel_status.set(filename)
             self.add_to_status(f"Excel file selected: {filename}")
+            
+            # Try to load columns from the selected sheet
+            self.load_columns()
         else:
             messagebox.showwarning("Warning", "No Excel file selected.")
+
+    def load_columns(self):
+        if not self.excel_file_path:
+            messagebox.showwarning("Warning", "Please select an Excel file first.")
+            return
+            
+        sheet_name = self.sheet_name_entry.get().strip()
+        if not sheet_name:
+            messagebox.showwarning("Warning", "Please enter a sheet name.")
+            return
+            
+        try:
+            self.add_to_status(f"Loading columns from sheet: {sheet_name}")
+            
+            # Load the Excel file and get the column names
+            df = pd.read_excel(self.excel_file_path, sheet_name=sheet_name)
+            self.available_columns = df.columns.tolist()
+            
+            # Update the dropdown with the column names
+            self.filter_column_dropdown['values'] = self.available_columns
+            
+            if self.available_columns:
+                # Select a default column (DiseaseName if available, otherwise first column)
+                if 'DiseaseName' in self.available_columns:
+                    self.filter_column.set('DiseaseName')
+                else:
+                    self.filter_column.set(self.available_columns[0])
+                
+                self.add_to_status(f"Loaded {len(self.available_columns)} columns from sheet: {sheet_name}")
+            else:
+                self.add_to_status("No columns found in the sheet.")
+                
+        except Exception as e:
+            self.add_to_status(f"Error loading columns: {str(e)}")
+            
+            # Check if the sheet exists
+            try:
+                available_sheets = pd.ExcelFile(self.excel_file_path).sheet_names
+                self.add_to_status(f"Available sheets: {', '.join(available_sheets)}")
+            except:
+                pass
 
     def select_pdf_file(self):
         file_path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
@@ -167,42 +258,77 @@ class DataFilterApp:
             messagebox.showwarning("Warning", "No PDF file selected.")
 
     def process_data(self):
-        disease_name_substring = self.disease_name_entry.get()
-        if not self.excel_file_path or not self.pdf_file_path or not disease_name_substring:
-            messagebox.showwarning("Warning", "Please select files and enter a disease name substring.")
+        # Get parameters
+        filter_column = self.filter_column.get()
+        search_term = self.search_term_entry.get()
+        sheet_name = self.sheet_name_entry.get().strip() or "Sheet1"
+        output_option = self.output_option.get()
+        
+        # Validate inputs
+        if not self.excel_file_path or not self.pdf_file_path:
+            messagebox.showwarning("Warning", "Please select both Excel and PDF files.")
+            return
+            
+        if not filter_column:
+            messagebox.showwarning("Warning", "Please select a column to filter by.")
+            return
+            
+        if not search_term:
+            messagebox.showwarning("Warning", "Please enter a search term.")
             return
 
         # Start progress bar
         self.progress.start()
         self.process_button.config(state="disabled")
-        self.add_to_status(f"Processing data for disease: {disease_name_substring}")
+        self.add_to_status(f"Processing data where {filter_column} contains '{search_term}' in sheet: {sheet_name}")
         
-        # Call the existing DataScript logic here
         try:
             self.add_to_status("Reading Excel file...")
-            df = pd.read_excel(self.excel_file_path, sheet_name='IPD DEC-2024')
-            if 'DiseaseName' not in df.columns:
-                raise ValueError("Column 'DiseaseName' not found in the sheet.")
+            try:
+                df = pd.read_excel(self.excel_file_path, sheet_name=sheet_name)
+            except ValueError as sheet_error:
+                if "Worksheet named" in str(sheet_error) and "not found" in str(sheet_error):
+                    available_sheets = pd.ExcelFile(self.excel_file_path).sheet_names
+                    sheet_list = ", ".join(available_sheets)
+                    self.add_to_status(f"Sheet '{sheet_name}' not found. Available sheets: {sheet_list}")
+                    raise ValueError(f"Sheet '{sheet_name}' not found. Available sheets: {sheet_list}")
+                else:
+                    raise sheet_error
+                    
+            if filter_column not in df.columns:
+                raise ValueError(f"Column '{filter_column}' not found in the sheet.")
 
-            filtered_df = df[df['DiseaseName'].str.contains(disease_name_substring, case=False, na=False)]
+            # Filter the data based on the selected column and search term
+            filtered_df = df[df[filter_column].astype(str).str.contains(search_term, case=False, na=False)]
+            
             if filtered_df.empty:
-                self.add_to_status(f"No data found for '{disease_name_substring}'.")
+                self.add_to_status(f"No data found where {filter_column} contains '{search_term}'.")
                 self.progress.stop()
                 self.process_button.config(state="normal")
                 return
-            self.add_to_status(f"Found {len(filtered_df)} records for '{disease_name_substring}'")
+                
+            self.add_to_status(f"Found {len(filtered_df)} records where {filter_column} contains '{search_term}'")
 
+            # Save the original data for later merging
+            filtered_df = filtered_df.reset_index(drop=True)
+            original_df = filtered_df.copy()
+
+            # Read the PDF file
             self.add_to_status("Reading PDF file...")
             pdf_document = fitz.open(self.pdf_file_path)
             pdf_text = "\n".join([pdf_document.load_page(i).get_text() for i in range(pdf_document.page_count)])
             pdf_document.close()
             self.add_to_status("PDF data extracted successfully")
 
+            # Prepare data for AI
             data_text = filtered_df.to_string(index=False)
 
+            # Prepare the AI prompt
             self.add_to_status("Preparing AI analysis...")
+            
+            # Alternative approach with three categories (if needed)
             prompt = f"""
-            Analyze the following filtered data related to "{disease_name_substring}" and provide insights based on the guidelines.
+            Analyze the following filtered data related to '{search_term}' in the {filter_column} column and provide insights based on the guidelines.
 
             {pdf_text}
 
@@ -210,25 +336,37 @@ class DataFilterApp:
             {data_text}
 
             Provide the response in **JSON format** with the following structure:
+            - For each record, include all the original data fields
+            - Add TWO additional fields:
+              1. "Meets Guidelines": MUST be one of exactly these three string values: 
+                 - "True" (fully or partially meets guidelines)
+                 - "False" (does not meet guidelines)
+              2. "Notes on Compliance": A text explanation of your analysis.
+            - Ensure patient/record identifiers match exactly with the original data
+            - Accuracy and data integrity are crucial for the analysis.
+            - Include any additional insights or recommendations based on the guidelines.
+            - You are encouraged to provide detailed and informative responses.
+            - You are a professional AI assistant specialized in medical data analysis.
+
+            Example output format (with the actual columns from the data):
 
             [
-              {{
-                "Patient ID": "01-606944",
-                "Prescribed Medications": ["Tab POLYMALT", "Tab CALDREE"],
-                "Meets Guidelines": false,
-                "Notes on Compliance": "Cefspan (Cefixime) is not a first-line choice for UTI."
-              }},
-              {{
-                "Patient ID": "01-519619",
-                "Prescribed Medications": ["Tab ERYTHROCIN", "Tab DUPHASTON"],
-                "Meets Guidelines": false,
-                "Notes on Compliance": "Erythromycin is not a first-line treatment for UTI."
-              }}
+                {{
+                    "column1": "value1",
+                    "column2": "value2",
+                    ...
+                    "Meets Guidelines": "True" or "False",
+                    "Notes on Compliance": "Treatment follows the guidelines for this condition."
+                }},
+                ...
             ]
+
+            Ensure accuracy in extracting and formatting the response while maintaining data integrity.
             """
 
+            # Send to Gemini AI
             self.add_to_status("Sending request to Gemini AI...")
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            model = genai.GenerativeModel("gemini-2.0-flash")
             response = model.generate_content(prompt)
 
             if response.text:
@@ -239,28 +377,103 @@ class DataFilterApp:
 
                 response_json = json.loads(json_text)
 
+                # Save JSON output
                 self.add_to_status("Saving results to JSON file...")
+                base_name = os.path.splitext(os.path.basename(self.excel_file_path))[0]
+                default_json_name = f"{base_name}by{filter_column}_Analyzed.json"
+                
                 self.output_json_path = filedialog.asksaveasfilename(
                     defaultextension=".json", 
                     filetypes=[("JSON files", "*.json")],
-                    title="Save JSON results"
+                    title="Save JSON results",
+                    initialfile=default_json_name
                 )
+                
                 if self.output_json_path:
                     with open(self.output_json_path, "w", encoding="utf-8") as json_file:
                         json.dump(response_json, json_file, indent=4)
-
-                    self.add_to_status("Creating Excel file from results...")
+                    self.add_to_status(f"JSON saved to: {os.path.basename(self.output_json_path)}")
+                    
+                    # Convert the JSON to DataFrame
                     response_df = pd.DataFrame(response_json)
-                    self.output_excel_path = filedialog.asksaveasfilename(
-                        defaultextension=".xlsx", 
-                        filetypes=[("Excel files", "*.xlsx")],
-                        title="Save Excel results"
-                    )
-                    if self.output_excel_path:
-                        response_df.to_excel(self.output_excel_path, index=False)
-                        self.add_to_status("Process completed successfully!")
-                    else:
-                        self.add_to_status("Excel file save cancelled.")
+                    
+                    # Handle Excel output based on selected option
+                    if output_option == "new_file":
+                        # Create a new Excel file
+                        self.add_to_status("Creating new Excel file from results...")
+                        
+                        # Generate default filename
+                        default_excel_name = f"{base_name}by{filter_column}_Analyzed.xlsx"
+                        
+                        self.output_excel_path = filedialog.asksaveasfilename(
+                            defaultextension=".xlsx", 
+                            filetypes=[("Excel files", "*.xlsx")],
+                            title="Save as new Excel file",
+                            initialfile=default_excel_name
+                        )
+                        
+                        if self.output_excel_path:
+                            analyzed_sheet_name = f"{sheet_name}_Analyzed"
+                            response_df.to_excel(self.output_excel_path, sheet_name=analyzed_sheet_name, index=False)
+                            self.add_to_status(f"Results saved to new file: {os.path.basename(self.output_excel_path)}")
+                        else:
+                            self.add_to_status("Excel file save cancelled.")
+                            
+                    else:  # Add as new sheet to existing file
+                        self.add_to_status("Adding results as a new sheet to the existing Excel file...")
+                        
+                        # Ask where to save the updated Excel file
+                        default_excel_name = f"{base_name}_Updated.xlsx"
+                        
+                        self.output_excel_path = filedialog.asksaveasfilename(
+                            defaultextension=".xlsx", 
+                            filetypes=[("Excel files", "*.xlsx")],
+                            title="Save updated Excel file",
+                            initialfile=default_excel_name
+                        )
+                        
+                        if self.output_excel_path:
+                            # If the selected path is different from the input file, create a copy first
+                            if self.output_excel_path != self.excel_file_path:
+                                self.add_to_status("Creating a copy of the original Excel file...")
+                                # Read all sheets from the original file
+                                with pd.ExcelFile(self.excel_file_path) as original_excel:
+                                    with pd.ExcelWriter(self.output_excel_path) as writer:
+                                        for sheet in original_excel.sheet_names:
+                                            pd.read_excel(self.excel_file_path, sheet_name=sheet).to_excel(
+                                                writer, sheet_name=sheet, index=False
+                                            )
+                            
+                            # Now add the new sheet
+                            analyzed_sheet_name = f"{sheet_name}_Analyzed"
+                            
+                            # Check if the sheet already exists
+                            try:
+                                with pd.ExcelFile(self.output_excel_path) as xls:
+                                    existing_sheets = xls.sheet_names
+                                    
+                                counter = 1
+                                original_name = analyzed_sheet_name
+                                while analyzed_sheet_name in existing_sheets:
+                                    analyzed_sheet_name = f"{original_name}_{counter}"
+                                    counter += 1
+                                    
+                                # Write to the file
+                                with pd.ExcelWriter(self.output_excel_path, mode='a', if_sheet_exists='replace') as writer:
+                                    response_df.to_excel(writer, sheet_name=analyzed_sheet_name, index=False)
+                                    
+                                self.add_to_status(f"Results added as sheet '{analyzed_sheet_name}' to: {os.path.basename(self.output_excel_path)}")
+                            except Exception as write_error:
+                                self.add_to_status(f"Error writing to Excel file: {str(write_error)}")
+                                self.add_to_status("Creating a new file instead...")
+                                
+                                # Fallback to creating a new file
+                                response_df.to_excel(self.output_excel_path, sheet_name=analyzed_sheet_name, index=False)
+                                self.add_to_status(f"Results saved to new file: {os.path.basename(self.output_excel_path)}")
+                        else:
+                            self.add_to_status("Excel file save cancelled.")
+                    
+                    self.add_to_status("Process completed successfully!")
                 else:
                     self.add_to_status("JSON file save cancelled.")
             else:
@@ -279,6 +492,6 @@ class DataFilterApp:
 
 if __name__ == "__main__":
     # Use ThemedTk for better looking UI
-    root = ThemedTk(theme="arc")  # You can use other themes like: 'breeze', 'equilux', 'arc', etc.
+    root = ThemedTk(theme="equilux")  # You can use other themes like: 'breeze', 'equilux', 'arc', etc.
     app = DataFilterApp(root)
     root.mainloop()
